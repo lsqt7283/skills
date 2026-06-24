@@ -26,9 +26,9 @@ Two layers, by design:
 - **The graph core (JSONL)** stays small and machine-fast — pure identity, typed
   relations, and time-stamped metrics. This is what you traverse.
 - **An optional OKF content layer (markdown)** holds the heavy, human-readable material
-  — entity dossiers and attached source excerpts/notes — under `docs/`. A node of kind
-  `okf` is just a *pointer* to a file. You traverse the lightweight graph and only open
-  an OKF file when you actually need the detail.
+  — entity dossiers, attached source excerpts/notes, and archived source text — under
+  `docs/`. A node of kind `okf` is just a *pointer* to a file. You traverse the
+  lightweight graph and only open an OKF file when you actually need the detail.
 
 Design priorities, in order: **compact**, **queryable**, **provenanced**,
 **emergent-but-disciplined**. JSONL is the source of truth; the OKF bundle is a
@@ -48,6 +48,7 @@ kg/
     log.md           export history
     <type>/<id>.md   generated entity dossiers (one per entity node)
     excerpts/<id>.md attached source excerpts / notes (authored, not regenerated)
+    references/<src-id>.md  archived source text (authored, not regenerated)
 ```
 
 Everything lives under one graph directory (default `kg/`). Pass `--dir <path>` to put
@@ -98,6 +99,22 @@ with its direction and shape, then **reused**:
 `card:"one"` marks a *functional* predicate (a company has one country of risk *at a
 given as_of*) — the linter uses this to detect real contradictions.
 
+## Conformance contract
+
+A knowledge base is **conformant** if (the `validate` command enforces all six):
+
+1. every node has `id` + `type`;
+2. every edge has `s`, `p`, `as_of`, `src`, and **exactly one** of `o` (relation) or
+   `val` (metric);
+3. every `src` resolves to a `sources.jsonl` entry;
+4. every predicate `p` is registered in `ontology.jsonl`;
+5. no functional (`card:"one"`) predicate has conflicting objects at the same `as_of`;
+6. every doc pointer and every archived source resolves to a file on disk.
+
+This is the stable interop surface — point other agents or colleagues at these six rules
+and a one-command linter, rather than at prose. Derived OKF files are additionally
+conformant with OKF v0.1 (every concept file carries YAML frontmatter with a `type`).
+
 ## Operations
 
 Run the engine with `python scripts/graph.py <cmd>` (stdlib-only; no install).
@@ -126,24 +143,31 @@ only entity-to-entity relations.
 
 ### 4. OKF content layer (read more only when needed)
 - `attach-doc --id excerpts/<slug> --type excerpt --title "..." --for AAPL --for TSMC --rel has_excerpt --src <srcid> --body "..."`
-  writes a conformant OKF markdown file under `docs/`, registers a lightweight doc node
-  (a pointer), registers the doc as a source, auto-registers the reference predicate if
-  new, and links it from each `--for` entity. Use `--body-file` to attach a longer
-  excerpt from a file. The same doc id can be attached to several entities.
-- `read-doc --id excerpts/<slug>` — prints one OKF file. This is progressive disclosure:
-  traverse cheaply, then open exactly the documents you need.
-- `export-okf [--out kg/docs]` — (re)generates the full OKF bundle from the graph: one
-  dossier per entity (frontmatter + Relationships + Metrics + Documents + Referenced-by +
-  Citations), per-directory `index.md`, a root `index.md` with `okf_version`, and a dated
-  `log.md` entry. Attached doc files are **never** overwritten — only dossiers and
-  indexes are regenerated.
+  writes a conformant OKF markdown file, registers a lightweight doc node (a pointer),
+  registers the doc as a source, auto-registers the reference predicate if new, and links
+  it from each `--for` entity. `--body-file` attaches longer material; the same doc id can
+  back several entities.
+- `archive-src --id <srcid> --title "..." --url ... --kind filing --body-file extract.txt`
+  archives the salient extracted text of a source as a first-class OKF concept under
+  `docs/references/<srcid>.md` and records the `archive` path on the `sources.jsonl` entry.
+  Use it for material that rots — paywalled articles, edited web pages, pulled transcripts —
+  so provenance stays durable. Citations in dossiers then link to the local archive.
+- `read-doc --id <concept-or-src-id>` — prints one OKF file (an excerpt, note, or archived
+  source). Progressive disclosure: traverse cheaply, then open exactly what you need.
+- `export-okf [--out kg/docs]` — (re)generates the bundle: one OKF-conformant dossier per
+  entity (frontmatter with Title-cased `type`, `resource: kg://node/<id>` back-pointer,
+  `title`/`description`/`tags`/`timestamp`; body with Relationships + Metrics + Documents +
+  Referenced-by + Citations), per-directory `index.md`, a root `index.md` with
+  `okf_version`, a `references/index.md` for archived sources, and a dated `log.md` entry.
+  Attached docs and archived sources are **never** overwritten — only dossiers and indexes
+  are regenerated.
 
 ### 5. Lint
-Run `validate` after any batch of writes. **Errors**: missing `as_of`/`src`, a `src` not
-in the registry, dangling node references, predicates not in the ontology (with a *"did
-you mean …?"* synonym hint), and contradictions (a `card:"one"` predicate with conflicting
-objects at the same `as_of`). **Warnings**: unused sources, doc pointers whose file is
-missing on disk.
+Run `validate` after any batch of writes; it enforces the six-rule conformance contract
+above. **Errors**: node missing `type`; edge missing `as_of`/`src`, or carrying both `o`
+and `val`, or neither; a `src` not in the registry; dangling node references; predicates
+not in the ontology (with a *"did you mean …?"* synonym hint); contradictions.
+**Warnings**: unused sources; doc pointers or archived sources whose file is missing.
 
 ## Ontology discipline (the thing that keeps it compact)
 
@@ -155,17 +179,18 @@ relations in their canonical direction; the `inverse` field lets traversal walk 
 
 ## Reference files
 
-- `references/schema.md` — full field specs (including doc nodes, reference edges, and
-  the OKF bundle layout) plus a worked example for each relation type the user cares about.
-- `references/playbooks.md` — ingest, query, attach-excerpt, export, and reconciliation
-  procedures, including the contradiction-vs-time-series rule.
+- `references/schema.md` — full field specs (doc nodes, reference edges, archived sources,
+  the OKF bundle layout, dossier frontmatter) plus a worked example for each relation type.
+- `references/playbooks.md` — ingest, query, attach-excerpt, archive-source, export, and
+  reconciliation procedures, including the contradiction-vs-time-series rule.
 
 ## Conventions
 
 - Prefer stable real-world ids: tickers for companies, ISO-3166 alpha-3 for countries
   (`TWN`, `USA`), GICS-style slugs for sectors.
 - Doc node `id` is its OKF concept id (path under `docs/`, minus `.md`), so the graph and
-  the bundle interoperate.
+  the bundle interoperate. Dossiers carry `resource: kg://node/<id>` so an OKF consumer can
+  map a concept file back to its graph node.
 - `as_of` is an ISO date for the period the fact describes. The same fact at different
   `as_of` values is a **time series**, not a conflict — keep all of them.
 - Keep `conf` (0–1) on inferred or uncertain edges; omit it when a source states the fact
